@@ -6,7 +6,7 @@ SHELL := bash -eu -o pipefail
 # default goal to show help
 .DEFAULT_GOAL := help
 .PHONY: all lint build mdlint ruff fix-linter format pyright run build-dev run-dev test \
-	shell shell-vippet shell-models shell-collector shell-videogenerator stop clean clean-output-videos help \
+	shell shell-vippet shell-models shell-model-download shell-collector shell-videogenerator stop clean clean-output-videos help \
 	build-videogenerator build-models build-onvif-discovery docker-build env-setup \
 	install-models-once install-models-force install-models-all \
 	test-smoke test-full
@@ -69,6 +69,8 @@ generate_openapi: $(VENV_DIR) ## Generate OpenAPI schema file
 env-setup: ## Environment setup target: always run before build/run targets that need .env and shared dirs
 	mkdir -p shared/collector-signals && chmod o+w shared/collector-signals
 	mkdir -p shared/models/output && chmod o+w shared/models/output
+	mkdir -p shared/model-download/venv && chmod o+w shared/model-download/venv
+	mkdir -p shared/model-download/cache && chmod o+w shared/model-download/cache
 	mkdir -p shared/videos/input && chmod o+w shared/videos/input
 	mkdir -p shared/videos/output && chmod o+w shared/videos/output
 	mkdir -p shared/videos/video-generator && chmod o+w shared/videos/video-generator
@@ -138,6 +140,9 @@ shell-vippet: ## Open shell in vippet container
 shell-models: ## Open shell in models container
 	$(MAKE) shell SERVICE=models
 
+shell-model-download: ## Open shell in model-download container
+	$(MAKE) shell SERVICE=model-download
+
 shell-collector: ## Open shell in collector container
 	$(MAKE) shell SERVICE=collector
 
@@ -145,10 +150,10 @@ shell-videogenerator: ## Open shell in videogenerator container
 	$(MAKE) shell SERVICE=videogenerator
 
 stop: ## Stop the docker compose services
-	docker compose down models collector videogenerator mediamtx vippet-ui vippet onvif-discovery
+	docker compose down models model-download collector videogenerator mediamtx vippet-ui vippet onvif-discovery
 
 clean: ## Clean all build artifacts
-	rm -rf shared/collector-signals shared/models/output/ shared/onvif/onvif_cameras.json shared/videos/input shared/videos/output shared/videos/video-generator
+	rm -rf shared/collector-signals shared/models/output/ shared/model-download/ shared/onvif/onvif_cameras.json shared/videos/input shared/videos/output shared/videos/video-generator
 
 clean-output-videos: ## Clean only output videos
 	rm -rf shared/videos/output/*
