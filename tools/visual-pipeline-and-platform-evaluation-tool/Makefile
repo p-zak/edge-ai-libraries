@@ -33,7 +33,7 @@ all: lint build run test ## Run lint, build, run and test
 
 lint: $(VENV_DIR) mdlint ruff pyright ## Run all linters
 
-MD_FILES := $(shell find . -type f \( -name '*.md' \) -not -path './.*' -print )
+MD_FILES := $(shell find . -type f \( -name '*.md' \) -not -path './.*' -not -path './shared/*' -print )
 mdlint: ## Lint MD files
 # download tool from https://github.com/igorshubovych/markdownlint-cli
 	markdownlint --version
@@ -42,19 +42,19 @@ mdlint: ## Lint MD files
 ruff: $(VENV_DIR) ## Run ruff linter
 	set +u; . ./$</bin/activate; set -u ;\
 	ruff --version ;\
-	# Exclude shared/scripts/ to avoid formatting user created scripts ;\
-	ruff check --exclude shared/scripts/ ;\
-	ruff format --check --exclude shared/scripts/ 
+	# Exclude shared/ — runtime-mounted volume, not source code ;\
+	ruff check --exclude shared/ ;\
+	ruff format --check --exclude shared/
 
 fix-linter: $(VENV_DIR) ## Fix linter issues using ruff
 	set +u; . ./$</bin/activate; set -u ;\
-	# Exclude shared/scripts/ to avoid formatting user created scripts ;\
-	ruff check --fix --exclude shared/scripts/ 
+	# Exclude shared/ — runtime-mounted volume, not source code ;\
+	ruff check --fix --exclude shared/
 
 format: $(VENV_DIR) ## Format code using ruff
 	set +u; . ./$</bin/activate; set -u ;\
-	# Exclude shared/scripts/ to avoid formatting user created scripts ;\
-	ruff format --exclude shared/scripts/ 
+	# Exclude shared/ — runtime-mounted volume, not source code ;\
+	ruff format --exclude shared/
 
 pyright: $(VENV_DIR) ## Run pyright type checker
 	set +u; . ./$</bin/activate; set -u ;\
