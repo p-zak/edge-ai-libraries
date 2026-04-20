@@ -783,6 +783,72 @@ class TestPipelineRunnerLatencyMetrics(unittest.TestCase):
         env = mock_popen.call_args.kwargs["env"]
         self._assert_tracer_env_applied(env)
 
+    # --- PipelineResult.latency_tracer_metrics semantics in validation mode ---
+    #
+    # Validation mode never parses tracer samples. The map on the result
+    # must still reflect whether the tracer was enabled, matching the
+    # semantics documented on `PipelineResult.latency_tracer_metrics`:
+    #   * `None`  → tracer disabled,
+    #   * `{}`    → tracer enabled but no samples were collected.
+
+    @patch("pipeline_runner.subprocess.Popen")
+    @patch.dict("os.environ", {}, clear=True)
+    def test_validation_mode_disabled_returns_none_metrics(self, mock_popen):
+        """With the flag False, validation results carry `latency_tracer_metrics=None`."""
+        process_mock = MagicMock()
+        process_mock.communicate.return_value = ("", "")
+        process_mock.returncode = 0
+        mock_popen.return_value = process_mock
+
+        runner = PipelineRunner(
+            mode="validation", max_runtime=5, enable_latency_metrics=False
+        )
+        result = runner.run(self.test_pipeline_command)
+
+        self.assertIsNone(result.latency_tracer_metrics)
+
+    @patch("pipeline_runner.subprocess.Popen")
+    @patch.dict("os.environ", {}, clear=True)
+    def test_validation_mode_enabled_returns_empty_metrics(self, mock_popen):
+        """With the flag True, validation results carry `latency_tracer_metrics={}`."""
+        process_mock = MagicMock()
+        process_mock.communicate.return_value = ("", "")
+        process_mock.returncode = 0
+        mock_popen.return_value = process_mock
+
+        runner = PipelineRunner(
+            mode="validation", max_runtime=5, enable_latency_metrics=True
+        )
+        result = runner.run(self.test_pipeline_command)
+
+        self.assertEqual(result.latency_tracer_metrics, {})
+
+    @patch("pipeline_runner.subprocess.Popen")
+    @patch.dict("os.environ", {}, clear=True)
+    def test_validation_mode_timeout_preserves_metrics_semantics(self, mock_popen):
+        """On hard-timeout, the returned PipelineResult keeps the same tracer-map semantics."""
+        import subprocess as _subprocess
+
+        process_mock = MagicMock()
+        # First communicate() raises TimeoutExpired; second (after kill) returns empty.
+        process_mock.communicate.side_effect = [
+            _subprocess.TimeoutExpired(cmd="gst_runner.py", timeout=1),
+            ("", ""),
+        ]
+        process_mock.returncode = -9
+        mock_popen.return_value = process_mock
+
+        runner = PipelineRunner(
+            mode="validation",
+            max_runtime=1,
+            hard_timeout=1,
+            enable_latency_metrics=True,
+        )
+        with patch.object(runner, "_graceful_terminate"):
+            result = runner.run(self.test_pipeline_command)
+
+        self.assertEqual(result.latency_tracer_metrics, {})
+
     # --- latency_tracer sample line from gst_runner is forwarded to INFO ---
 
     @patch("pipeline_runner.Popen")

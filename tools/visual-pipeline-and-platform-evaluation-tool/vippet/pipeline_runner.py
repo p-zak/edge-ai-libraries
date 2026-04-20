@@ -415,6 +415,12 @@ class PipelineRunner:
                 cancelled=False,
                 stdout=stdout.splitlines() if stdout else [],
                 stderr=errors,
+                # Validation mode does not parse tracer samples. Propagate
+                # the instance map as-is so the API semantics documented on
+                # `PipelineResult.latency_tracer_metrics` hold:
+                # `None` → tracer disabled, `{}` → enabled but no samples
+                # were (or could be) collected.
+                latency_tracer_metrics=self.latency_tracer_metrics,
             )
 
         return PipelineResult(
@@ -422,6 +428,9 @@ class PipelineRunner:
             cancelled=False,
             stdout=stdout.splitlines() if stdout else [],
             stderr=self._parse_validation_stderr(stderr),
+            # See note above: validation mode never populates the map,
+            # so this reflects only whether the tracer was enabled.
+            latency_tracer_metrics=self.latency_tracer_metrics,
         )
 
     def _run_normal(self, pipeline_command: str, total_streams: int) -> PipelineResult:

@@ -648,7 +648,7 @@ class PipelineManager:
                     graph_instance,
                     stream_source_name,
                     stream_sink_name,
-                    stream_id,
+                    _,
                 ) = graph_instance.apply_stream_identifiers(
                     pipeline_index, stream_index
                 )
@@ -706,6 +706,7 @@ class PipelineManager:
 
                 pipeline_parts.append(unique_pipeline_str)
 
+        # TODO: Must be removed once the live metrics stream is in place
         # Diagnostic summary so the stream-to-tracer correlation can be
         # verified from the logs. Kept at INFO because it is printed once
         # per run (not per sample).
