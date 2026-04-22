@@ -6,7 +6,7 @@ SHELL := bash -eu -o pipefail
 # default goal to show help
 .DEFAULT_GOAL := help
 .PHONY: all lint build mdlint ruff fix-linter format pyright run build-dev run-dev test \
-	shell shell-vippet shell-models shell-model-download shell-videogenerator stop clean clean-output-videos help \
+	shell shell-vippet shell-models shell-model-download shell-metrics-service shell-videogenerator stop clean clean-output-videos help \
 	build-videogenerator build-models build-onvif-discovery docker-build env-setup \
 	install-models-once install-models-force install-models-all \
 	test-smoke test-full

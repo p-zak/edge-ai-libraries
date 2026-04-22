@@ -7,6 +7,7 @@ The runner uses gst_runner.py to execute pipelines in either normal or validatio
 mode, providing unified interface for both production pipeline execution and
 pipeline validation.
 """
+
 import json
 import logging
 import os
@@ -889,7 +890,9 @@ class PipelineRunner:
             )
             urllib.request.urlopen(req, timeout=1)
         except Exception as e:
-            self.logger.warning("Failed to push FPS metric to %s: %s", self.metrics_service_url, e)
+            self.logger.warning(
+                "Failed to push FPS metric to %s: %s", self.metrics_service_url, e
+            )
 
     def _parse_and_record_latency_sample(self, line: str) -> None:
         """
