@@ -264,8 +264,16 @@ class PipelineRunner:
         self.poll_interval = poll_interval
         self.inactivity_timeout = inactivity_timeout
         self.hard_timeout = hard_timeout
+        # Resolve the metrics-service base URL once and pre-compute the
+        # full endpoint used by `_push_fps_metric`. Trailing slashes on
+        # the configured base are stripped so concatenation with the
+        # fixed path cannot produce `//api/v1/...`, which some proxies
+        # and routers treat as a distinct (and unmapped) path.
         self.metrics_service_url = os.environ.get(
             "METRICS_SERVICE_URL", self.DEFAULT_METRICS_SERVICE_URL
+        ).rstrip("/")
+        self._metrics_service_fps_url = (
+            f"{self.metrics_service_url}/api/v1/metrics/simple"
         )
         self.enable_latency_metrics = enable_latency_metrics
         self.logger = logging.getLogger("PipelineRunner")
@@ -883,15 +891,22 @@ class PipelineRunner:
             fps: FPS value to push.
         """
         try:
-            url = f"{self.metrics_service_url}/api/v1/metrics/simple"
             data = json.dumps({"name": "fps", "value": fps}).encode()
             req = urllib.request.Request(
-                url, data=data, headers={"Content-Type": "application/json"}
+                self._metrics_service_fps_url,
+                data=data,
+                headers={"Content-Type": "application/json"},
             )
-            urllib.request.urlopen(req, timeout=1)
+            # Use a context manager so the underlying socket / file
+            # descriptor is released deterministically after every POST,
+            # instead of waiting for GC to reclaim the response object.
+            with urllib.request.urlopen(req, timeout=1):
+                pass
         except Exception as e:
             self.logger.warning(
-                "Failed to push FPS metric to %s: %s", self.metrics_service_url, e
+                "Failed to push FPS metric to %s: %s",
+                self._metrics_service_fps_url,
+                e,
             )
 
     def _parse_and_record_latency_sample(self, line: str) -> None:

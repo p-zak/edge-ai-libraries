@@ -173,7 +173,6 @@ Hardware profiles (`COMPOSE_PROFILES`): `cpu`, `gpu`, `npu` — set automaticall
 | `APP_LOG_LEVEL`                  | Python logging level for the application                     | `INFO`                                                     |
 | `RUNNER_LOG_LEVEL`               | Logging level for gst_runner.py subprocess                   | `INFO`                                                     |
 | `WEB_SERVER_LOG_LEVEL`           | Logging level for uvicorn web server                         | `WARNING`                                                  |
-| `METRICS_LOG_LEVEL`              | Logging level for metrics WebSocket routes                   | `INFO`                                                     |
 | `GST_DEBUG`                      | GStreamer native debug level (integer, 0-9)                  | `1`                                                        |
 | `MODELS_PATH`                    | Path to downloaded models                                    | `/models/output`                                           |
 | `SUPPORTED_MODELS_FILE`          | Path to supported_models.yaml                                | `/models/supported_models.yaml`                            |

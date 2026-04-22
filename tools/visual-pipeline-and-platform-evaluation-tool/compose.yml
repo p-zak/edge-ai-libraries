@@ -26,7 +26,6 @@ x-vippet: &vippet
     APP_LOG_LEVEL: INFO
     RUNNER_LOG_LEVEL: INFO
     WEB_SERVER_LOG_LEVEL: WARNING
-    METRICS_LOG_LEVEL: INFO
     MODELS_PATH: /models/output
     SUPPORTED_MODELS_FILE: /models/supported_models.yaml
     INPUT_VIDEO_DIR: /videos/input
@@ -71,7 +70,7 @@ services:
       vippet:
         condition: service_healthy
       metrics-service:
-        condition: service_started
+        condition: service_healthy
     environment:
       http_proxy: ${http_proxy}
       https_proxy: ${https_proxy}
@@ -153,7 +152,7 @@ services:
     volumes:
       - /sys:/sys:ro
       - /run:/run:ro
-      # TODO: Temporary, to have websocket output plugin available. Removed this mount and file from repo after metrics-service enables the plugin by default.
+      # TODO: Temporary, to have websocket output plugin available. Remove this mount and file from repo after metrics-service enables the plugin by default.
       - ./my-telegraf.conf:/etc/telegraf/telegraf.conf:ro
     environment:
       METRICS_PORT: 9090
