@@ -35,9 +35,6 @@ tools/visual-pipeline-and-platform-evaluation-tool/
 │   │   └── config/       # Navigation and app config
 │   ├── vite.config.ts    # Vite config with API proxy rules
 │   └── Dockerfile        # Nginx-based production image
-├── collector/            # Hardware metrics collector (Telegraf + qmassa)
-│   ├── qmassa_reader.py  # Reads GPU metrics from qmassa FIFO and emits InfluxDB line protocol
-│   └── supervisord.conf  # Runs qmassa + telegraf as supervised processes
 ├── video_generator/      # Synthetic test video generator (Python + GStreamer)
 ├── models/               # Model download and management scripts
 │   └── model_manager.sh  # Interactive/automated model installer
@@ -134,13 +131,13 @@ make generate_openapi
 
 ## Docker Compose Services
 
-| Service     | Description                               | Port |
-|-------------|-------------------------------------------|------|
-| `vippet`    | Backend (FastAPI)                         | 7860 |
-| `vippet-ui` | Frontend (Nginx)                          | 80   |
-| `mediamtx`  | RTSP server                               | 8554 |
-| `models`    | Model installer (profile: `do-not-start`) | -    |
-| `collector` | Metrics collector (profile: `gpu`/`npu`)  | -    |
+| Service           | Description                               | Port |
+|-------------------|-------------------------------------------|------|
+| `vippet`          | Backend (FastAPI)                         | 7860 |
+| `vippet-ui`       | Frontend (Nginx)                          | 80   |
+| `mediamtx`        | RTSP server                               | 8554 |
+| `models`          | Model installer (profile: `do-not-start`) | -    |
+| `metrics-service` | Metrics collector                         | 9090 |
 
 Hardware profiles (`COMPOSE_PROFILES`): `cpu`, `gpu`, `npu` — set automatically by `setup_env.sh`.
 

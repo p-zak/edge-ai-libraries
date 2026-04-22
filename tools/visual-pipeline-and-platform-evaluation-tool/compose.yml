@@ -47,7 +47,6 @@ x-vippet: &vippet
     - 'a 189:* rwm'
   volumes:
     - "/dev:/dev"
-    - ./shared/collector-signals:/home/dlstreamer/vippet/.collector-signals
     - ./shared/models/:/models
     - ./shared/videos/:/videos
     - ./shared/scripts/:/scripts
@@ -139,35 +138,6 @@ services:
     container_name: vippet
     ports:
       - "7860:7860"
-  collector:
-    image: docker.io/intel/vippet-collector:${DOCKER_TAG}
-    build:
-      context: ./collector
-      dockerfile: Dockerfile
-      args:
-        http_proxy:
-        https_proxy:
-        no_proxy:
-    container_name: collector
-    ports:
-      - "9274:9274"
-    privileged: true
-    devices:
-      - "/sys:/sys"
-      - "/dev:/dev"
-      - "/run:/run"
-      - "/proc:/proc"
-    pid: host # qmassa needs it
-    volumes:
-      - "./shared/collector-signals:/app/.collector-signals"
-    restart: on-failure:5
-    depends_on:
-      vippet:
-        condition: service_healthy
-    environment:
-      http_proxy: ${http_proxy}
-      https_proxy: ${https_proxy}
-      no_proxy: ${no_proxy}
   metrics-service:
     image: docker.io/intel/metrics-service:2026.1.0-20260417-weekly
     container_name: metrics-service
@@ -183,7 +153,7 @@ services:
     volumes:
       - /sys:/sys:ro
       - /run:/run:ro
-      - ./shared/collector-signals:/app/.collector-signals
+      # TODO: Temporary, to have websocket output plugin available. Removed this mount and file from repo after metrics-service enables the plugin by default.
       - ./my-telegraf.conf:/etc/telegraf/telegraf.conf:ro
     environment:
       METRICS_PORT: 9090
