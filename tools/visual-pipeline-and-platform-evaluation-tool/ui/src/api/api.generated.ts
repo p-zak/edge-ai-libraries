@@ -362,9 +362,6 @@ const injectedRtkApi = api
           url: `/videos/upload`,
           method: "POST",
           body: queryArg.bodyUploadVideo,
-          headers: {
-            "content-length": queryArg["content-length"],
-          },
         }),
         invalidatesTags: ["videos"],
       }),
@@ -589,7 +586,6 @@ export type CheckVideoInputExistsApiArg = {
 export type UploadVideoApiResponse =
   /** status 201 Successful Response */ Video;
 export type UploadVideoApiArg = {
-  "content-length"?: number | null;
   bodyUploadVideo: BodyUploadVideo;
 };
 export type GetCamerasApiResponse =

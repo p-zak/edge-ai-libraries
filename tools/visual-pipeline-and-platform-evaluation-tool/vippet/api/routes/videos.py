@@ -4,7 +4,7 @@ import re
 import tempfile
 from typing import List, Optional, Tuple
 
-from fastapi import APIRouter, File, Header, Query, UploadFile
+from fastapi import APIRouter, File, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 import api.api_schemas as schemas
@@ -60,7 +60,11 @@ UPLOAD_ALLOWED_EXTENSIONS: list[str] = _parse_csv_env(
 )
 UPLOAD_ALLOWED_CONTAINERS: list[str] = _parse_csv_env(
     "UPLOAD_ALLOWED_CONTAINERS",
-    "mp4,mov,mkv,avi,mpegts",
+    # "raw" covers H.264/H.265 elementary streams (.264, .avc, .h265, .hevc),
+    # which map to container="raw" in _EXTENSION_TO_CONTAINER. Keeping it in
+    # the default allow-list matches the default UPLOAD_ALLOWED_EXTENSIONS,
+    # which also accepts those extensions.
+    "mp4,mov,mkv,avi,mpegts,raw",
 )
 UPLOAD_ALLOWED_CODECS: list[str] = _parse_csv_env(
     "UPLOAD_ALLOWED_CODECS",
@@ -329,7 +333,6 @@ async def check_video_input_exists(
 )
 async def upload_video(
     file: UploadFile = File(...),
-    content_length: Optional[int] = Header(default=None),
 ):
     """
     **Upload a new video file into `UPLOADED_VIDEO_DIR`.**
@@ -339,13 +342,11 @@ async def upload_video(
     1. **Pre-write validation** (before any bytes touch disk):
        - Filename is present and safe (no path traversal)
        - File extension is in `UPLOAD_ALLOWED_EXTENSIONS`
-       - `Content-Length` header (when provided) does not exceed
-         `UPLOAD_MAX_SIZE_BYTES`
        - A video with the same basename does not already exist in
          `AUTO_VIDEO_DIR` or `UPLOADED_VIDEO_DIR`
-    2. **Stream upload to a temporary file**, enforcing the size limit
-       while the bytes arrive. Aborts and deletes the temp file when the
-       limit is exceeded.
+    2. **Stream upload to a temporary file**, enforcing
+       `UPLOAD_MAX_SIZE_BYTES` per chunk. Aborts and deletes the temp file
+       the moment the accumulated byte count exceeds the limit.
     3. **Post-write validation** via `cv2.VideoCapture`:
        - Container format is in `UPLOAD_ALLOWED_CONTAINERS`
        - Codec is in `UPLOAD_ALLOWED_CODECS`
@@ -443,25 +444,6 @@ async def upload_video(
             ),
             found=ext,
             allowed=list(UPLOAD_ALLOWED_EXTENSIONS),
-        )
-
-    # Fast reject based on the Content-Length header. The final enforcement
-    # happens while streaming because the header is advisory and can be
-    # missing or wrong.
-    if content_length is not None and content_length > UPLOAD_MAX_SIZE_BYTES:
-        logger.warning(
-            "Upload rejected upfront: Content-Length=%d exceeds limit=%d",
-            content_length,
-            UPLOAD_MAX_SIZE_BYTES,
-        )
-        return _upload_error_response(
-            schemas.VideoUploadErrorKind.FILE_TOO_LARGE,
-            (
-                f"File is too large ({content_length} bytes). "
-                f"Maximum allowed size is {UPLOAD_MAX_SIZE_BYTES} bytes."
-            ),
-            found=content_length,
-            allowed=[UPLOAD_MAX_SIZE_BYTES],
         )
 
     # Reject duplicates early; the UI also calls /check-video-input-exists

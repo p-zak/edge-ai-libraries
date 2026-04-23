@@ -180,7 +180,7 @@ Hardware profiles (`COMPOSE_PROFILES`): `cpu`, `gpu`, `npu` — set automaticall
 | `UPLOADED_VIDEO_DIR`             | Path to user-uploaded videos                                 | `/videos/input/uploaded`                                   |
 | `DEFAULT_RECORDINGS_FILE`        | Path to the YAML listing recordings to auto-download         | `/videos/default_recordings.yaml`                          |
 | `UPLOAD_ALLOWED_EXTENSIONS`      | Comma-separated allow-list of upload file extensions         | `mp4,mkv,mov,avi,ts,264,avc,h265,hevc`                     |
-| `UPLOAD_ALLOWED_CONTAINERS`      | Comma-separated allow-list of upload container formats       | `mp4,mov,mkv,avi,mpegts`                                   |
+| `UPLOAD_ALLOWED_CONTAINERS`      | Comma-separated allow-list of upload container formats       | `mp4,mov,mkv,avi,mpegts,raw`                               |
 | `UPLOAD_ALLOWED_CODECS`          | Comma-separated allow-list of upload video codecs            | `h264,h265`                                                |
 | `UPLOAD_MAX_SIZE_BYTES`          | Maximum accepted upload body size in bytes                   | `2147483648` (2 GiB)                                       |
 | `OUTPUT_VIDEO_DIR`               | Path to output videos                                        | `/videos/output`                                           |

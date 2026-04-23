@@ -376,23 +376,6 @@ class TestUploadVideoEndpoint(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["error"], "unsupported_extension")
 
-    def test_content_length_too_large_rejected(self):
-        """Content-Length exceeding the cap is rejected upfront."""
-        with patch("api.routes.videos.UPLOAD_MAX_SIZE_BYTES", 10):
-            with patch("api.routes.videos.VideosManager") as mock_cls:
-                mock_cls.return_value = MagicMock()
-                response = self._post(
-                    "clip.mp4",
-                    payload=b"x",
-                    extra_headers={"Content-Length": "99999"},
-                )
-        # TestClient recomputes Content-Length to the actual body size,
-        # so we instead exercise the same branch by setting the limit to
-        # a value below the actual multipart body length.
-        self.assertIn(response.status_code, (422,))
-        body = response.json()
-        self.assertEqual(body["error"], "file_too_large")
-
     def test_duplicate_filename_rejected(self):
         """A filename already known to VideosManager is rejected."""
         mock_manager = MagicMock()
@@ -407,47 +390,23 @@ class TestUploadVideoEndpoint(unittest.TestCase):
     # -------- Stage 2: streaming size enforcement ---------------------------
 
     def test_file_too_large_mid_stream(self):
-        """Bytes streamed past the limit produce file_too_large.
+        """Bytes streamed past the per-chunk size limit produce file_too_large.
 
-        Exercises the mid-stream enforcement branch by bypassing the upfront
-        Content-Length check: we drop the advertised header to zero via a
-        response-building hack on the client, so the route sees
-        ``content_length=0`` upfront and only the per-chunk comparison can
-        reject the upload.
+        The route no longer exposes a Content-Length header parameter (to keep
+        it out of the OpenAPI schema - browsers are forbidden from setting
+        Content-Length), so size enforcement happens exclusively mid-stream.
+        An 8-byte payload with the limit lowered to 4 must be rejected.
         """
         mock_manager = MagicMock()
         mock_manager.filename_exists.return_value = False
 
-        # Build a multipart body by hand and override the Content-Length
-        # header with a small value. httpx honours an explicit value on
-        # ``content=`` uploads (unlike ``files=`` uploads where it
-        # re-computes the header).
-        boundary = "----vippetboundary1234"
-        body = (
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="file"; filename="big.mp4"\r\n'
-            f"Content-Type: video/mp4\r\n\r\n"
-            f"12345678\r\n"
-            f"--{boundary}--\r\n"
-        ).encode("utf-8")
-
         with patch("api.routes.videos.UPLOAD_MAX_SIZE_BYTES", 4):
             with patch("api.routes.videos.VideosManager", return_value=mock_manager):
-                response = self.client.post(
-                    "/videos/upload",
-                    content=body,
-                    headers={
-                        "Content-Type": f"multipart/form-data; boundary={boundary}",
-                        # Advertise a small Content-Length so the upfront
-                        # check passes. The actual payload is larger, so
-                        # the per-chunk check must fire.
-                        "Content-Length": "0",
-                    },
-                )
+                response = self._post("big.mp4", payload=b"12345678")
 
         self.assertEqual(response.status_code, 422)
-        body_json = response.json()
-        self.assertEqual(body_json["error"], "file_too_large")
+        body = response.json()
+        self.assertEqual(body["error"], "file_too_large")
 
     # -------- Stage 3: post-write cv2 validation ----------------------------
 

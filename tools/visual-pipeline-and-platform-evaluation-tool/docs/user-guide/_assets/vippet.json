@@ -2251,35 +2251,17 @@
           "videos"
         ],
         "summary": "Upload a new video file",
-        "description": "**Upload a new video file into `UPLOADED_VIDEO_DIR`.**\n\n## Operation\n\n1. **Pre-write validation** (before any bytes touch disk):\n   - Filename is present and safe (no path traversal)\n   - File extension is in `UPLOAD_ALLOWED_EXTENSIONS`\n   - `Content-Length` header (when provided) does not exceed\n     `UPLOAD_MAX_SIZE_BYTES`\n   - A video with the same basename does not already exist in\n     `AUTO_VIDEO_DIR` or `UPLOADED_VIDEO_DIR`\n2. **Stream upload to a temporary file**, enforcing the size limit\n   while the bytes arrive. Aborts and deletes the temp file when the\n   limit is exceeded.\n3. **Post-write validation** via `cv2.VideoCapture`:\n   - Container format is in `UPLOAD_ALLOWED_CONTAINERS`\n   - Codec is in `UPLOAD_ALLOWED_CODECS`\n4. On success: move the temp file into `UPLOADED_VIDEO_DIR`, create\n   metadata JSON, convert to TS, create TS metadata JSON, register both\n   in the in-memory VideosManager cache.\n\nEvery validation rejection returns HTTP 422 with a `VideoUploadError`\nbody containing both a human-readable `detail` field and structured\n`error` / `found` / `allowed` fields.\n\n## Parameters\n\n- `file` (multipart/form-data) - Video file to upload\n\n## Response Format\n\n| Code | Description |\n|------|-------------|\n| 201  | Video uploaded successfully, returns the `Video` metadata |\n| 422  | Upload rejected (`VideoUploadError` body with `error`, `found`, `allowed`, `detail`) |\n| 500  | Unexpected server error (for example disk full during move) |\n\n## Conditions\n\n### \u2705 Success\n- File has a filename that contains only safe characters\n- File extension is in `UPLOAD_ALLOWED_EXTENSIONS`\n- File size is within `UPLOAD_MAX_SIZE_BYTES`\n- Container is in `UPLOAD_ALLOWED_CONTAINERS`\n- Codec is in `UPLOAD_ALLOWED_CODECS`\n- No file with the same name exists in `AUTO_VIDEO_DIR` or `UPLOADED_VIDEO_DIR`\n- Metadata extraction and TS conversion both succeed\n\n### \u274c Failure\n- Missing or unsafe filename \u2192 422 (`missing_filename`)\n- Unsupported extension \u2192 422 (`unsupported_extension`)\n- File exceeds the size limit \u2192 422 (`file_too_large`)\n- Duplicate filename \u2192 422 (`file_exists`)\n- Unsupported container \u2192 422 (`unsupported_container`)\n- Unsupported codec \u2192 422 (`unsupported_codec`)\n- `cv2.VideoCapture` cannot open the file \u2192 422 (`invalid_video`)\n- Metadata extraction, TS conversion or disk move fails \u2192 500\n- Any other unexpected runtime error \u2192 500\n\n## Example success response (HTTP 201)\n\n```json\n{\n  \"filename\": \"myclip.mp4\",\n  \"width\": 1920,\n  \"height\": 1080,\n  \"fps\": 30.0,\n  \"frame_count\": 1800,\n  \"codec\": \"h264\",\n  \"duration\": 60.0,\n  \"source\": \"uploaded\",\n  \"path\": \"uploaded/myclip.mp4\"\n}\n```\n\n## Example error response (HTTP 422, unsupported codec)\n\n```json\n{\n  \"detail\": \"Unsupported codec 'vp9'. Allowed codecs: h264, h265.\",\n  \"error\": \"unsupported_codec\",\n  \"found\": \"vp9\",\n  \"allowed\": [\"h264\", \"h265\"]\n}\n```",
+        "description": "**Upload a new video file into `UPLOADED_VIDEO_DIR`.**\n\n## Operation\n\n1. **Pre-write validation** (before any bytes touch disk):\n   - Filename is present and safe (no path traversal)\n   - File extension is in `UPLOAD_ALLOWED_EXTENSIONS`\n   - A video with the same basename does not already exist in\n     `AUTO_VIDEO_DIR` or `UPLOADED_VIDEO_DIR`\n2. **Stream upload to a temporary file**, enforcing\n   `UPLOAD_MAX_SIZE_BYTES` per chunk. Aborts and deletes the temp file\n   the moment the accumulated byte count exceeds the limit.\n3. **Post-write validation** via `cv2.VideoCapture`:\n   - Container format is in `UPLOAD_ALLOWED_CONTAINERS`\n   - Codec is in `UPLOAD_ALLOWED_CODECS`\n4. On success: move the temp file into `UPLOADED_VIDEO_DIR`, create\n   metadata JSON, convert to TS, create TS metadata JSON, register both\n   in the in-memory VideosManager cache.\n\nEvery validation rejection returns HTTP 422 with a `VideoUploadError`\nbody containing both a human-readable `detail` field and structured\n`error` / `found` / `allowed` fields.\n\n## Parameters\n\n- `file` (multipart/form-data) - Video file to upload\n\n## Response Format\n\n| Code | Description |\n|------|-------------|\n| 201  | Video uploaded successfully, returns the `Video` metadata |\n| 422  | Upload rejected (`VideoUploadError` body with `error`, `found`, `allowed`, `detail`) |\n| 500  | Unexpected server error (for example disk full during move) |\n\n## Conditions\n\n### \u2705 Success\n- File has a filename that contains only safe characters\n- File extension is in `UPLOAD_ALLOWED_EXTENSIONS`\n- File size is within `UPLOAD_MAX_SIZE_BYTES`\n- Container is in `UPLOAD_ALLOWED_CONTAINERS`\n- Codec is in `UPLOAD_ALLOWED_CODECS`\n- No file with the same name exists in `AUTO_VIDEO_DIR` or `UPLOADED_VIDEO_DIR`\n- Metadata extraction and TS conversion both succeed\n\n### \u274c Failure\n- Missing or unsafe filename \u2192 422 (`missing_filename`)\n- Unsupported extension \u2192 422 (`unsupported_extension`)\n- File exceeds the size limit \u2192 422 (`file_too_large`)\n- Duplicate filename \u2192 422 (`file_exists`)\n- Unsupported container \u2192 422 (`unsupported_container`)\n- Unsupported codec \u2192 422 (`unsupported_codec`)\n- `cv2.VideoCapture` cannot open the file \u2192 422 (`invalid_video`)\n- Metadata extraction, TS conversion or disk move fails \u2192 500\n- Any other unexpected runtime error \u2192 500\n\n## Example success response (HTTP 201)\n\n```json\n{\n  \"filename\": \"myclip.mp4\",\n  \"width\": 1920,\n  \"height\": 1080,\n  \"fps\": 30.0,\n  \"frame_count\": 1800,\n  \"codec\": \"h264\",\n  \"duration\": 60.0,\n  \"source\": \"uploaded\",\n  \"path\": \"uploaded/myclip.mp4\"\n}\n```\n\n## Example error response (HTTP 422, unsupported codec)\n\n```json\n{\n  \"detail\": \"Unsupported codec 'vp9'. Allowed codecs: h264, h265.\",\n  \"error\": \"unsupported_codec\",\n  \"found\": \"vp9\",\n  \"allowed\": [\"h264\", \"h265\"]\n}\n```",
         "operationId": "upload_video",
-        "parameters": [
-          {
-            "name": "content-length",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Content-Length"
-            }
-          }
-        ],
         "requestBody": {
-          "required": true,
           "content": {
             "multipart/form-data": {
               "schema": {
                 "$ref": "#/components/schemas/Body_upload_video"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {

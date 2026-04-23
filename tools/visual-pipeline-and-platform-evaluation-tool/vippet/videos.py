@@ -219,6 +219,10 @@ class VideosManager:
 
     _instance: Optional["VideosManager"] = None
     _lock = threading.Lock()
+    # Serialises the final commit inside register_uploaded_video() so two
+    # concurrent uploads that slipped past filename_exists() cannot both
+    # move their temp file into the same target path.
+    _upload_lock = threading.Lock()
 
     def __new__(cls) -> "VideosManager":
         if cls._instance is None:
@@ -276,15 +280,22 @@ class VideosManager:
     @staticmethod
     def _ensure_subdirs() -> None:
         """
-        Ensure AUTO_VIDEO_DIR and UPLOADED_VIDEO_DIR exist on disk.
+        Ensure AUTO_VIDEO_DIR and UPLOADED_VIDEO_DIR exist on disk with
+        mode 0o755.
 
-        Both directories are created with mode 0o755 if missing. Any OS error
-        is re-raised as RuntimeError since the application cannot function
-        without these folders.
+        ``os.makedirs(mode=...)`` alone is subject to the process umask and
+        does not touch already-existing directories, so we follow up with
+        an explicit ``os.chmod`` to guarantee the mode regardless of the
+        umask and regardless of who created the directory originally. Any
+        OS error is re-raised as RuntimeError since the application cannot
+        function without these folders.
         """
         for subdir in (AUTO_VIDEO_DIR, UPLOADED_VIDEO_DIR):
             try:
-                os.makedirs(subdir, exist_ok=True)
+                os.makedirs(subdir, mode=0o755, exist_ok=True)
+                # Enforce the mode explicitly - os.makedirs() respects the
+                # umask and leaves existing directories untouched.
+                os.chmod(subdir, 0o755)
             except OSError as e:
                 raise RuntimeError(
                     f"Failed to create video subdirectory '{subdir}': {e}"
@@ -1026,21 +1037,48 @@ class VideosManager:
         basename = os.path.basename(target_filename)
         target_path = os.path.join(UPLOADED_VIDEO_DIR, basename)
 
-        # Move the validated temp file into its final location. shutil.move
-        # is used because the temp dir and the shared volume can live on
-        # different filesystems.
-        if not self._move_file(temp_path, target_path):
-            raise RuntimeError(f"Failed to move uploaded file '{basename}' into place.")
+        # Serialise the commit so two concurrent uploads that both passed
+        # filename_exists() earlier cannot race to move their temp files
+        # into the same ``target_path``. The atomic ``O_CREAT | O_EXCL``
+        # reservation below turns the filename check + move into a single
+        # critical section per target path.
+        with self._upload_lock:
+            # Atomically reserve ``target_path``. If the file (or a
+            # reservation from a concurrent upload) already exists, abort
+            # before touching anything on disk.
+            try:
+                fd = os.open(
+                    target_path,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o644,
+                )
+                os.close(fd)
+            except FileExistsError as exc:
+                raise RuntimeError(
+                    f"A video with filename '{basename}' already exists."
+                ) from exc
 
-        # The streaming temp file is created with mode 0600 for safety, which
-        # prevents the UI's nginx (running as a different user in its own
-        # container) from reading the final video and serving it back to the
-        # browser. Relax the mode to 0644 - matching the other files produced
-        # during post-upload processing - so the UI can render the preview.
-        try:
-            os.chmod(target_path, 0o644)
-        except OSError as exc:
-            logger.warning(f"Could not set permissions on '{target_path}': {exc}")
+            # Move the validated temp file into its final location. shutil.move
+            # is used because the temp dir and the shared volume can live on
+            # different filesystems. We just created an empty placeholder
+            # at ``target_path`` above; shutil.move replaces it atomically
+            # on POSIX (same filesystem) or overwrites it otherwise.
+            if not self._move_file(temp_path, target_path):
+                # Drop the placeholder we created so a retry can succeed.
+                self._cleanup_file(target_path)
+                raise RuntimeError(
+                    f"Failed to move uploaded file '{basename}' into place."
+                )
+
+            # The streaming temp file is created with mode 0600 for safety, which
+            # prevents the UI's nginx (running as a different user in its own
+            # container) from reading the final video and serving it back to the
+            # browser. Relax the mode to 0644 - matching the other files produced
+            # during post-upload processing - so the UI can render the preview.
+            try:
+                os.chmod(target_path, 0o644)
+            except OSError as exc:
+                logger.warning(f"Could not set permissions on '{target_path}': {exc}")
 
         # Generate the metadata JSON for the original file.
         original_video = self._ensure_video_metadata(target_path, "uploaded")
