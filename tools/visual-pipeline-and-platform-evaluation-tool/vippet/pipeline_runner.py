@@ -16,9 +16,9 @@ import select
 import signal
 import subprocess
 import sys
-import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from subprocess import PIPE, Popen
 
@@ -148,6 +148,34 @@ class PipelineRunner:
     DEFAULT_METRICS_SERVICE_URL = "http://metrics-service:9090"
 
     # ------------------------------------------------------------------
+    # Shared worker pool for fire-and-forget metric pushes.
+    #
+    # Every metric push (`_push_fps_metric`, `_push_latency_sample`,
+    # `_push_final_latency_metrics`) schedules work through
+    # `_post_metrics_async`. Creating a brand-new `threading.Thread`
+    # per push scales poorly: with N streams the runner emits one FPS
+    # push + one latency push per stream every second, plus N final
+    # latency pushes at shutdown. Under load this would spawn
+    # hundreds of short-lived threads per second.
+    #
+    # A single class-level `ThreadPoolExecutor` caps concurrency at
+    # `_METRICS_EXECUTOR_WORKERS` and reuses threads across pushes.
+    # The executor is declared as a daemon pool — its worker threads
+    # do not keep the Python process alive after the main thread
+    # exits, mirroring the previous `daemon=True` thread behaviour.
+    #
+    # Shared at the class level (not per-instance) on purpose: many
+    # runners may exist in the same process (density `Benchmark`
+    # reuses one, the validation path creates one per job, etc.) and
+    # metrics-service traffic is I/O-bound, so one pool is enough to
+    # absorb all of them and no coordination is needed across
+    # instances. The executor is created lazily on first push so
+    # importing this module stays side-effect free.
+    # ------------------------------------------------------------------
+    _METRICS_EXECUTOR_WORKERS = 4
+    _metrics_executor: "ThreadPoolExecutor | None" = None
+
+    # ------------------------------------------------------------------
     # latency_tracer configuration
     #
     # When `enable_latency_metrics=True`, the GStreamer subprocess is
@@ -260,28 +288,26 @@ class PipelineRunner:
                 `GST_DEBUG=GST_TRACER:7` (appended to any existing value) and
                 `GST_TRACERS=latency_tracer(flags=pipeline,interval=1000)`.
                 When False (default), neither variable is modified.
-            job_id: Identifier of the owning job. When provided, every FPS
-                metric pushed by this runner carries a ``tags.job_id``
-                field so metrics-service can partition data per job; this
-                is how concurrent jobs are distinguished in the metrics
-                backend. When ``None`` (default), the ``tags`` field is
-                omitted from the payload — used by ad-hoc callers
-                (e.g. video transcoding) that do not belong to any job.
-                Accepted by both ``normal`` and ``validation`` modes for
-                a uniform API, but validation mode never pushes FPS
-                (no ``gvafpscounter`` is attached), so the value is
-                effectively unused there.
+            job_id: Identifier of the owning job. When provided, every
+                metric pushed by this runner — both FPS and
+                ``pipeline_latency`` — carries a ``tags.job_id`` field
+                so metrics-service can partition data per job; this is
+                how concurrent jobs are distinguished in the metrics
+                backend. When ``None`` (default), the ``job_id`` tag is
+                omitted from every payload (FPS pushes then carry no
+                ``tags`` field at all; latency pushes still carry
+                ``stream_id``). Used by ad-hoc callers (e.g. video
+                transcoding) that do not belong to any job. Accepted by
+                both ``normal`` and ``validation`` modes for a uniform
+                API, but validation mode never pushes metrics
+                (no ``gvafpscounter`` / tracer is attached), so the
+                value is effectively unused there.
         """
         self.mode = mode
         self.max_runtime = max_runtime
         self.poll_interval = poll_interval
         self.inactivity_timeout = inactivity_timeout
         self.hard_timeout = hard_timeout
-        # Resolve the metrics-service base URL once and pre-compute the
-        # full endpoint used by `_push_fps_metric`. Trailing slashes on
-        # the configured base are stripped so concatenation with the
-        # fixed path cannot produce `//api/v1/...`, which some proxies
-        # and routers treat as a distinct (and unmapped) path.
         # Resolve the metrics-service base URL once and pre-compute the
         # two endpoint URLs used by the push helpers. Trailing slashes
         # on the configured base are stripped so concatenation with the
@@ -924,10 +950,16 @@ class PipelineRunner:
         """
         Fire-and-forget HTTP POST to metrics-service.
 
-        Performs the POST on a daemon thread so the pipeline hot loop
-        is never blocked by a slow or unavailable metrics-service.
-        Failures are logged at WARNING level from the worker thread
-        and never propagate back to the caller.
+        Submits the POST to a shared class-level
+        ``ThreadPoolExecutor`` (see ``_get_metrics_executor``) so the
+        pipeline hot loop is never blocked by a slow or unavailable
+        metrics-service. The pool caps concurrency at
+        ``_METRICS_EXECUTOR_WORKERS`` and reuses threads across
+        pushes, which avoids the unbounded-thread-spawn pattern a
+        per-push ``threading.Thread`` would create under load (many
+        streams × 1 Hz FPS + latency + per-stream final pushes).
+        Failures are logged at WARNING level from the worker and
+        never propagate back to the caller.
 
         This is the single I/O primitive shared by both the FPS push
         (single-metric endpoint) and the latency push (batch endpoint);
@@ -942,12 +974,12 @@ class PipelineRunner:
                 before scheduling the POST so the worker thread does
                 not share the dict with the caller.
             description: Short label used in the WARNING log if the
-                request fails (e.g. ``"fps"`` or ``"latency batch"``).
+                request fails (e.g. ``"fps"`` or ``"latency"``).
                 Kept separate from the URL so logs are readable even
                 when the endpoint path is unfamiliar.
         """
         # Snapshot everything the worker thread needs so it never
-        # reaches back into `self` on the hot path — keeps the thread
+        # reaches back into `self` on the hot path — keeps the worker
         # self-contained and avoids any accidental lifetime coupling.
         logger = self.logger
         data = json.dumps(payload).encode()
@@ -969,11 +1001,39 @@ class PipelineRunner:
                     "Failed to push %s metric to %s: %s", description, url, e
                 )
 
-        # Daemon thread so a slow metrics-service cannot keep the
-        # process alive after the main thread exits. We do not keep a
-        # reference to the Thread: each push is independent and we
-        # never need to join it.
-        threading.Thread(target=_worker, daemon=True).start()
+        # Submit the push to the shared worker pool. The pool caps
+        # concurrency at `_METRICS_EXECUTOR_WORKERS` and reuses
+        # threads, so bursts (many streams emitting latency every
+        # second + per-stream final pushes at shutdown) cannot turn
+        # into an unbounded thread spawn. We do not keep the returned
+        # Future: each push is independent and never joined.
+        self._get_metrics_executor().submit(_worker)
+
+    @classmethod
+    def _get_metrics_executor(cls) -> ThreadPoolExecutor:
+        """
+        Return (and lazily create) the shared metrics-push worker pool.
+
+        The pool is a single class-level ``ThreadPoolExecutor`` used
+        by every runner instance in the process. It is created on
+        first use so importing this module does not spawn any
+        threads, and its worker threads are daemons (via
+        ``thread_name_prefix`` + the executor's own daemon behaviour)
+        so they do not keep the Python process alive after the main
+        thread exits.
+
+        Lazy creation is race-safe enough for our use: the worst case
+        under a tight race is two executors being created and one
+        being immediately garbage-collected. Since the executor is
+        never closed on purpose (metric pushes may continue until
+        process exit), no resource leak results from the lost one.
+        """
+        if cls._metrics_executor is None:
+            cls._metrics_executor = ThreadPoolExecutor(
+                max_workers=cls._METRICS_EXECUTOR_WORKERS,
+                thread_name_prefix="vippet-metrics",
+            )
+        return cls._metrics_executor
 
     def _push_fps_metric(self, fps: float) -> None:
         """

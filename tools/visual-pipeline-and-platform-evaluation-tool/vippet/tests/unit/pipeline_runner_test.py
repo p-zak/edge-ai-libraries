@@ -13,35 +13,51 @@ from pipeline_runner import (
 )
 
 
-class _InlineThread:
-    """Test double for `threading.Thread` that runs `target` inline.
+class _SyncExecutor:
+    """Test double for the metrics-push ``ThreadPoolExecutor``.
 
-    Production code schedules every metrics push (`_post_metrics_async`)
-    on a daemon thread so the pipeline hot loop is never blocked by
-    HTTP I/O. That makes assertions like
-    ``mock_urlopen.assert_called_once()`` racy in unit tests — by the
-    time the assertion runs, the worker thread may not have executed
+    Production code submits every metrics push
+    (``_post_metrics_async``) to a shared class-level
+    ``ThreadPoolExecutor`` so the pipeline hot loop is never blocked
+    by HTTP I/O. That makes assertions like
+    ``mock_urlopen.assert_called_once()`` racy in unit tests — by
+    the time the assertion runs, the worker may not have executed
     yet.
 
-    Replacing ``pipeline_runner.threading.Thread`` with this class
-    makes every push synchronous and deterministic: `start()` simply
-    invokes `target(*args, **kwargs)` in the calling thread. The
-    worker's own try/except still swallows exceptions, so test
-    behaviour mirrors production apart from timing.
+    Patching ``PipelineRunner._get_metrics_executor`` to return this
+    stub makes every push synchronous and deterministic:
+    ``submit(fn, *args, **kwargs)`` simply invokes ``fn`` in the
+    calling thread. The worker's own try/except still swallows
+    exceptions, so test behaviour mirrors production apart from
+    timing.
     """
 
-    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
-        self._target = target
-        self._args = args
-        self._kwargs = kwargs or {}
+    def submit(self, fn, *args, **kwargs):
+        fn(*args, **kwargs)
+        # Return a real-looking sentinel so callers that store the
+        # future do not trip over ``None``. No test inspects it.
+        return MagicMock(name="sync-future")
 
-    def start(self):
-        if self._target is not None:
-            self._target(*self._args, **self._kwargs)
 
-    def join(self, timeout=None):
-        # No-op: `start` already ran `target` to completion.
-        return
+def _patch_sync_metrics_executor(target):
+    """Decorator that swaps the shared metrics executor for a sync stub.
+
+    Uses ``patch.object(..., new=...)`` so no extra mock argument is
+    injected into the decorated methods — keeping test signatures
+    unchanged when the decorator is applied at class level.
+
+    The replacement is wrapped in ``classmethod`` so that the
+    descriptor binding of the original ``_get_metrics_executor`` is
+    preserved (otherwise the auto-passed ``cls`` would arrive as a
+    spurious positional argument). A fresh ``_SyncExecutor`` is
+    returned on every call; it is stateless so the cost is
+    negligible.
+    """
+    return patch.object(
+        PipelineRunner,
+        "_get_metrics_executor",
+        new=classmethod(lambda cls: _SyncExecutor()),
+    )(target)
 
 
 def _extract_pushed_fps_values(mock_urlopen: MagicMock) -> list[float]:
@@ -114,14 +130,15 @@ def _make_process_mock(stdout_lines: list[str], exit_code: int = 0) -> MagicMock
     return process_mock
 
 
-@patch("pipeline_runner.threading.Thread", _InlineThread)
+@_patch_sync_metrics_executor
 class TestPipelineRunnerNormalMode(unittest.TestCase):
     """Tests for PipelineRunner in normal mode (production pipeline execution).
 
-    `threading.Thread` is replaced with `_InlineThread` at the class
-    level so metrics pushes (`_post_metrics_async`) run synchronously
-    in the calling thread. That keeps urlopen assertions
-    deterministic without changing any production code path.
+    The shared metrics-push ``ThreadPoolExecutor`` is replaced with a
+    synchronous stub at the class level so metrics pushes
+    (``_post_metrics_async``) run inline in the calling thread. That
+    keeps urlopen assertions deterministic without changing any
+    production code path.
     """
 
     def setUp(self):
@@ -408,7 +425,7 @@ class TestPipelineRunnerNormalMode(unittest.TestCase):
 
 
 @patch("pipeline_runner.urllib.request.urlopen", new=MagicMock())
-@patch("pipeline_runner.threading.Thread", _InlineThread)
+@_patch_sync_metrics_executor
 class TestFpsMetricSelection(unittest.TestCase):
     """Tests for the FPS metric selection fallback chain in _run_normal.
 
@@ -739,7 +756,7 @@ class TestPipelineRunnerModeValidation(unittest.TestCase):
 
 
 @patch("pipeline_runner.urllib.request.urlopen", new=MagicMock())
-@patch("pipeline_runner.threading.Thread", _InlineThread)
+@_patch_sync_metrics_executor
 class TestPipelineRunnerLatencyMetrics(unittest.TestCase):
     """Tests for the `enable_latency_metrics` subprocess-env configuration.
 
@@ -981,7 +998,7 @@ class TestPipelineRunnerLatencyMetrics(unittest.TestCase):
 
 
 @patch("pipeline_runner.urllib.request.urlopen", new=MagicMock())
-@patch("pipeline_runner.threading.Thread", _InlineThread)
+@_patch_sync_metrics_executor
 class TestLatencyTracerIntervalParser(unittest.TestCase):
     """Unit tests for the `latency_tracer_pipeline_interval` line parser.
 
@@ -1181,17 +1198,17 @@ class TestLatencyTracerIntervalParser(unittest.TestCase):
         )
 
 
-@patch("pipeline_runner.threading.Thread", _InlineThread)
+@_patch_sync_metrics_executor
 class TestLatencyMetricsPush(unittest.TestCase):
     """Tests for the live + final latency push to metrics-service.
 
     Covers the runner behaviour introduced by ITEP-89980:
     ``_push_latency_sample`` fires on every parsed interval line, and
     ``_push_final_latency_metrics`` re-pushes the last sample per
-    stream once the subprocess exits. ``threading.Thread`` is
-    replaced with ``_InlineThread`` so every push runs synchronously
-    in the calling thread, which keeps urlopen assertions
-    deterministic.
+    stream once the subprocess exits. The shared metrics-push
+    ``ThreadPoolExecutor`` is replaced with a synchronous stub so
+    every push runs inline in the calling thread, which keeps
+    urlopen assertions deterministic.
     """
 
     # Sample from the DLStreamer tracer documentation — identical to
@@ -1567,7 +1584,7 @@ class TestGracefulTerminate(unittest.TestCase):
         proc.send_signal.assert_called_once_with(signal.SIGINT)
 
 
-@patch("pipeline_runner.threading.Thread", _InlineThread)
+@_patch_sync_metrics_executor
 class TestRunNormalEdgeCases(unittest.TestCase):
     """End-to-end coverage for rarely exercised ``_run_normal`` paths.
 
